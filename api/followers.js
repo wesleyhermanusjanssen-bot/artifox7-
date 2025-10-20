@@ -1,29 +1,24 @@
-// Serverless function for Vercel (Node.js runtime) that uses headless Chrome
-// to read the *real* follower count from the Artifox page.
+// Vercel Serverless Function — gebruikt Puppeteer (headless Chrome)
+// om het aantal followers live van de Gamefound-pagina te halen.
+
 import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 
-// 🚨 Force Node.js runtime on Vercel (NOT Edge)
+// ✅ Nieuwe correcte runtime-aanduiding
 export const config = {
-  runtime: "nodejs18.x",
+  runtime: "nodejs", // <-- DIT is nu correct
   maxDuration: 20,
-  memory: 1024,
-  regions: ["iad1", "cdg1", "arn1"] // any is fine; these are common
+  memory: 1024
 };
 
 export default async function handler(req, res) {
   const url = req.query.url || "https://gamefound.com/en/projects/artifox/artifox";
   let browser;
-
   try {
-    // Some hosts want this explicit
-    chromium.setHeadlessMode = true;
-    chromium.setGraphicsMode = false;
-
     const executablePath = await chromium.executablePath();
 
     browser = await puppeteer.launch({
-      args: chromium.args,
+      args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
       defaultViewport: { width: 1200, height: 800 },
       executablePath,
       headless: chromium.headless
@@ -36,15 +31,13 @@ export default async function handler(req, res) {
     await page.setExtraHTTPHeaders({ "Accept-Language": "en-US,en;q=0.9,nl;q=0.8" });
 
     await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
-    // Nudge to render late UI bits
     await page.waitForTimeout(2000);
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 3));
     await page.waitForTimeout(1000);
 
-    // Grab HTML and try several patterns
     const html = await page.content();
-
     let followers = null;
+
     let m =
       html.match(/Join\s+(\d{1,3}(?:[.,]\d{3})*|\d+)\s+followers/i) ||
       html.match(/\bFollow\b[^\d]{0,60}[\(\[]\s*(\d{1,3}(?:[.,]\d{3})*|\d+)\s*[\)\]]/i) ||
@@ -56,7 +49,6 @@ export default async function handler(req, res) {
     if (m) followers = parseInt(m[1].replace(/[^\d]/g, ""), 10);
 
     if (!Number.isFinite(followers)) {
-      // As a fallback, walk text nodes in the DOM
       followers = await page.evaluate(() => {
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         while (walker.nextNode()) {
@@ -84,6 +76,6 @@ export default async function handler(req, res) {
   } catch (e) {
     return res.status(502).json({ error: "Puppeteer fout", detail: String(e) });
   } finally {
-    if (browser) { try { await browser.close(); } catch {} }
+    if (browser) try { await browser.close(); } catch {}
   }
 }
